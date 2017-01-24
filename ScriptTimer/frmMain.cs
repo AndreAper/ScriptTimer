@@ -14,44 +14,94 @@ namespace ScriptTimer
 {
     public partial class frmMain : Form
     {
-        TimeSpan time;
-        string url;
-        decimal waitingPeriod;
+        private TimeSpan time;
+        private string url;
+        private decimal waitingPeriod;
+        private Task scriptTask;
 
-        async Task RunScript()
+        private void ForceKillAllBrowserInstances()
         {
-            time = new TimeSpan(dtpTime.Value.Hour, dtpTime.Value.Minute, dtpTime.Value.Second);
-
-            if (url.Length != 0)
+            try
             {
-                Process[] procList = Process.GetProcessesByName("iexplore.exe");
+                if (this.InvokeRequired == true) this.Invoke((MethodInvoker)delegate
+                {
+                    lbxLog.Items.Add(DateTime.Now.ToString() + " Begin find and terminate browser instances.");
+                });
+
+                Process[] procList = Process.GetProcessesByName("iexplore");
 
                 if (procList.Length > 0)
                 {
                     for (int i = 0; i < procList.Length; i++)
                     {
-                        procList[i].Kill();
+                        procList[i].CloseMainWindow();
                     }
+
+                    procList = null;
                 }
-
-                Process p = new Process();
-                p.StartInfo.FileName = "iexplore.exe";
-                p.StartInfo.Arguments = url;
-                p.StartInfo.WindowStyle = ProcessWindowStyle.Minimized;
-                p.StartInfo.CreateNoWindow = true;
-                p.Start();
-
-                int ms = ((int)nudWaitingPeriod.Value * 1000);
-                await Task.Delay(ms);
-
-                p.Kill();
-
-                if (this.InvokeRequired == true) this.Invoke((MethodInvoker)delegate { lblStatus.Text = "Last Run: " + DateTime.Now.ToString(); });
-                
+            }
+            catch (Exception ex)
+            {
+                if (this.InvokeRequired == true) this.Invoke((MethodInvoker)delegate
+                {
+                    lbxLog.Items.Add(DateTime.Now.ToString() + " " + ex.GetType().Name + ": " + ex.Message);
+                });
             }
         }
 
-        void UpdateFrm()
+        private async Task RunScriptAsync()
+        {
+            time = new TimeSpan(dtpTime.Value.Hour, dtpTime.Value.Minute, dtpTime.Value.Second);
+
+            if (url.Length != 0)
+            {
+                await Task.Run(() => ForceKillAllBrowserInstances());
+
+                if (this.InvokeRequired == true) this.Invoke((MethodInvoker)delegate {
+                    lbxLog.Items.Add(DateTime.Now.ToString() + " Find and terminate browser instances completed.");
+                    lbxLog.Items.Add(DateTime.Now.ToString() + " Start browser instance and run script.");
+                });
+
+                try
+                {
+                    Process p = new Process();
+                    p.StartInfo.FileName = "iexplore.exe";
+                    p.StartInfo.Arguments = url;
+                    p.StartInfo.WindowStyle = ProcessWindowStyle.Minimized;
+                    p.StartInfo.CreateNoWindow = true;
+                    p.Start();
+
+                    int ms = ((int)nudWaitingPeriod.Value * 1000);
+                    await Task.Delay(ms);
+
+                    p.CloseMainWindow();
+                }
+                catch (Exception ex)
+                {
+                    if (this.InvokeRequired == true) this.Invoke((MethodInvoker)delegate
+                    {
+                        lbxLog.Items.Add(DateTime.Now.ToString() + " " + ex.GetType().Name + ": " + ex.Message);
+                        btnForce.Enabled = true;
+                    });
+                }
+
+                if (this.InvokeRequired == true) this.Invoke((MethodInvoker)delegate {
+                    lbxLog.Items.Add(DateTime.Now.ToString() + " Task completed successfull.");
+                    lbxLog.Items.Add(String.Empty);
+                    btnForce.Enabled = true;
+                });               
+            }
+            else
+            {
+                if (this.InvokeRequired == true) this.Invoke((MethodInvoker)delegate {
+                    lbxLog.Items.Add(DateTime.Now.ToString() + " Error: No url entered!");
+                    lbxLog.Items.Add(String.Empty);
+                    btnForce.Enabled = true;
+                });
+            }
+        }
+
+        private void UpdateFrm()
         {
             tbxUrl.Text = url;
             dtpTime.Value = new DateTime(DateTime.Now.Year, DateTime.Now.Month, DateTime.Now.Day, time.Hours, time.Minutes, time.Seconds);
@@ -64,6 +114,7 @@ namespace ScriptTimer
             time = Properties.Settings.Default.Time;
             url = Properties.Settings.Default.Url;
             waitingPeriod = Properties.Settings.Default.WaitingPeriod;
+            scriptTask = new Task(async () => await RunScriptAsync());
 
             UpdateFrm();
         }
@@ -80,12 +131,16 @@ namespace ScriptTimer
                 chkBtnEnabled.Text = "Enabled";
                 chkBtnEnabled.BackColor = Color.GreenYellow;
                 chkBtnEnabled.ForeColor = Color.Black;
+
+                btnForce.Enabled = false;
             }
             else
             {
                 chkBtnEnabled.Text = "Disabled";
                 chkBtnEnabled.BackColor = Color.Crimson;
                 chkBtnEnabled.ForeColor = Color.White;
+
+                btnForce.Enabled = true;
             }
 
             UpdateFrm();
@@ -97,13 +152,35 @@ namespace ScriptTimer
 
             if (TimeSpan.Compare(tsNow, time) == 0)
             {
-                Task.Run(() => RunScript());
+                if (scriptTask.Status != TaskStatus.Running)
+                {
+                    lbxLog.Items.Add(DateTime.Now.ToString() + " Start new task.");
+
+                    scriptTask = new Task(async () => await RunScriptAsync());
+                    scriptTask.Start();
+                }
+                else
+                {
+                    lbxLog.Items.Add(DateTime.Now.ToString() + " Task canceled because another task is running.");
+                }
             }
         }
 
         private void btnForce_Click(object sender, EventArgs e)
         {
-            Task.Run(() => RunScript());
+            if (scriptTask.Status != TaskStatus.Running)
+            {
+                btnForce.Enabled = false;
+
+                lbxLog.Items.Add(DateTime.Now.ToString() + " Start new task manually.");
+                scriptTask = new Task(async () => await RunScriptAsync());
+                scriptTask.Start();
+
+            }
+            else
+            {
+                lbxLog.Items.Add(DateTime.Now.ToString() + " Task canceled because another task is running.");
+            }
         }
 
         private void frmMain_FormClosing(object sender, FormClosingEventArgs e)
@@ -127,6 +204,11 @@ namespace ScriptTimer
         private void nudWaitingPeriod_ValueChanged(object sender, EventArgs e)
         {
             waitingPeriod = nudWaitingPeriod.Value;
+        }
+
+        private void btnClearLog_Click(object sender, EventArgs e)
+        {
+            lbxLog.Items.Clear();
         }
     }
 }
